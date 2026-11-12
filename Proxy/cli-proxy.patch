@@ -1,0 +1,109 @@
+--- a/cmd/server/main.go
++++ b/cmd/server/main.go
+@@ -648,6 +648,8 @@
+ 		cfg.AuthDir = resolvedAuthDir
+ 	}
+ 	githubauth.SetToken(cfg.GitHubToken)
++	// skill-store-no-background-fetch-v1: the dedicated backend has no management UI.
++	cfg.RemoteManagement.DisableControlPanel = true
+ 	managementasset.SetCurrentConfig(cfg)
+ 
+ 	// Create login options to be used in authentication flows.
+@@ -749,8 +751,8 @@
+ 		if tuiMode {
+ 			if standalone {
+ 				// Standalone mode: start an embedded local server and connect TUI client to it.
+-				managementasset.StartAutoUpdater(context.Background(), configFilePath)
+-				misc.StartAntigravityVersionUpdater(context.Background())
++				// skill-store-no-background-fetch-v1: unrelated updater disabled.
++				// skill-store-no-background-fetch-v1: unrelated updater disabled.
+ 				registry.SetLocalModelCatalogs(localModel)
+ 				hook := tui.NewLogHook(2000)
+ 				hook.SetFormatter(&logging.LogFormatter{})
+@@ -824,8 +826,8 @@
+ 			}
+ 		} else {
+ 			// Start the main proxy service
+-			managementasset.StartAutoUpdater(context.Background(), configFilePath)
+-			misc.StartAntigravityVersionUpdater(context.Background())
++			// skill-store-no-background-fetch-v1: unrelated updater disabled.
++			// skill-store-no-background-fetch-v1: unrelated updater disabled.
+ 			registry.SetLocalModelCatalogs(localModel)
+ 			cmd.StartServiceWithPluginHost(cfg, configFilePath, password, pluginHost, serverOptions...)
+ 		}
+--- a/internal/api/server_routes.go
++++ b/internal/api/server_routes.go
+@@ -42,13 +42,23 @@
+ // setupRoutes configures the API routes for the server.
+ // It defines the endpoints and associates them with their respective handlers.
+ func (s *Server) setupRoutes() {
++	// skill-store-sol-low-final-http-v1: reject all unguarded model routes and WebSocket upgrades.
++	s.engine.Use(func(c *gin.Context) {
++		path := c.Request.URL.Path
++		allowed := (path == "/healthz" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead)) || (path == "/v1/models" && c.Request.Method == http.MethodGet) || (path == "/v1/responses" && c.Request.Method == http.MethodPost)
++		if !allowed || strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
++			c.AbortWithStatusJSON(http.StatusNotImplemented, gin.H{"error": gin.H{"code": "skill_store_route_not_supported"}})
++			return
++		}
++		c.Next()
++	})
+ 	healthzHandler := func(c *gin.Context) {
+ 		if c.Request.Method == http.MethodHead {
+ 			c.Status(http.StatusOK)
+ 			return
+ 		}
+ 
+-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
++		c.JSON(http.StatusOK, gin.H{"status": "ok", "forkId": "skill-store-sol-low-final-http-v1", "sourceCommit": "091ff27f31285ec4fd1dd5823b44f7f51fb8f48b", "policy": gin.H{"model": "gpt-6.1-sol", "effort": "low", "enforcement": "after_payload_finalizer_before_http_request", "transport": "http", "websocket": "blocked"}, "realModelInferenceVerified": false, "backgroundFetch": "skill-store-no-background-fetch-v1", "startupFetchesDisabled": true})
+ 	}
+ 	s.engine.GET("/healthz", healthzHandler)
+ 	s.engine.HEAD("/healthz", healthzHandler)
+--- a/internal/runtime/executor/codex_executor_request.go
++++ b/internal/runtime/executor/codex_executor_request.go
+@@ -137,6 +137,10 @@
+ 	}
+ 	rawJSON = helps.SanitizeCodexInputItemIDs(rawJSON)
+ 	rawJSON = helps.FinalizePayload(ctx, rawJSON)
++	// skill-store-sol-low-final-http-v1: after every finalizer, immediately before HTTP serialization.
++	var policyErr error
++	rawJSON, policyErr = skillStoreFinalSolMaxPayload(rawJSON)
++	if policyErr != nil { return nil, nil, policyErr }
+ 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
+ 	if err != nil {
+ 		return nil, nil, err
+--- a/sdk/cliproxy/service_lifecycle.go
++++ b/sdk/cliproxy/service_lifecycle.go
+@@ -11,7 +11,6 @@
+ 	"github.com/router-for-me/CLIProxyAPI/v8/internal/home"
+ 	"github.com/router-for-me/CLIProxyAPI/v8/internal/redisqueue"
+ 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+-	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor"
+ 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+ 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+ 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+@@ -212,9 +211,7 @@
+ 	}
+ 
+ 	s.registerModelRefreshCallback()
+-	if !homeEnabled {
+-		go s.runAntigravityModelRefresh(ctx)
+-	}
++	// skill-store-no-background-fetch-v1: unrelated provider model polling is disabled.
+ 
+ 	select {
+ 	case <-ctx.Done():
+@@ -392,13 +389,5 @@
+ 
+ // startModelCatalogUpdaters applies the same catalog policy for SDK and CLI users.
+ func (s *Service) startModelCatalogUpdaters(ctx context.Context) {
+-	s.cfgMu.RLock()
+-	cfg := s.cfg
+-	s.cfgMu.RUnlock()
+-	proxyURL := ""
+-	if cfg != nil {
+-		registry.StartModelCatalogUpdaters(ctx, cfg.Models, cfg.Home.Enabled)
+-		proxyURL = cfg.ProxyURL
+-	}
+-	executor.StartXAIVersionUpdater(ctx, proxyURL)
++	// skill-store-no-background-fetch-v1: keep embedded catalogs; do not start remote readers or xAI version checks.
+ }
